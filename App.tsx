@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Analytics } from '@vercel/analytics/react';
 import { CourseSelector } from './components/CourseSelector';
 import { FacultyPreferences } from './components/FacultyPreferences';
 import { TimetableGrid } from './components/TimetableGrid';
@@ -1255,6 +1256,7 @@ const App: React.FC = () => {
   return (
     <AuthProvider>
       <AppContent />
+      <Analytics />
     </AuthProvider>
   );
 };

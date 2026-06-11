@@ -1,82 +1,180 @@
-# VIT AutoScheduler
+# 📅 Amity University AutoScheduler
 
-An intelligent timetable generator for VIT students. Upload your course data, set preferences, and generate conflict-free timetables automatically.
+An intelligent, constraint-satisfaction timetable generator built for Amity University students. Upload your course data, set your professor/slot preferences, and generate conflict-free timetables automatically without head-scratching manual overlaps.
 
-## Features
+---
 
-- 📊 **Smart Data Import** - Upload PDF, Excel, or paste course data directly
-- 🤖 **AI-Powered Analysis** - Gemini AI extracts course information automatically  
-- ⚙️ **Faculty Preferences** - Set preferred faculty for theory and lab sections
-- 📅 **Conflict-Free Generation** - Generates up to 50 valid timetables with no slot clashes
-- ⭐ **Favorites System** - Save and compare your preferred schedules
-- 💬 **AI Chat Analysis** - Get insights about your schedules with AI
-- 📥 **Download** - Export timetables as VIT-styled HTML
-- 🔐 **Cloud Sync** - Firebase authentication with session persistence
+## 🚀 Live App
 
-## Tech Stack
+👉 https://autoschedulers.vercel.app/
 
-- **Frontend**: React 19 + TypeScript + Vite
-- **Styling**: TailwindCSS
-- **AI**: Google Gemini 2.5 Flash
-- **Backend**: Firebase (Auth + Firestore)
-- **File Parsing**: PDF.js + XLSX
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg">
+  <img src="https://img.shields.io/badge/version-1.0.0-green.svg">
+  <img src="https://img.shields.io/badge/platform-Web-orange.svg">
+</p>
 
-## Getting Started
+---
 
-### Prerequisites
-- Node.js 18+
-- Firebase project with Auth and Firestore enabled
-- Google AI Studio API key
+## 🧠 Why I Built This
 
-### Installation
+At Amity University, course selection and tracking open slots alongside preferred professors can feel like solving a massive puzzle. Mapping multiple combinations manually without overlapping slots is frustrating and time-consuming.
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/yourusername/auto-scheduler.git
-   cd auto-scheduler
-   ```
+**AutoScheduler** automates this entire process — helping you generate clean, clash-free schedules instantly.
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+> ⚠️ **Note:** This is an independent personal project built for individual utility and experimentation. It is not affiliated with or officially supported by Amity University.
 
-3. Create a `.env.local` file with your API keys:
-   ```
-   GEMINI_API_KEY=your_gemini_api_key
-   ```
+---
 
-4. Update Firebase config in `services/firebase.ts` with your project credentials.
+## ✨ Features
 
-5. Run the development server:
-   ```bash
-   npm run dev
-   ```
+* 📊 **Smart Excel & Data Import**
+  Upload `.xlsx`, PDF files, or paste raw text. The system automatically parses and structures your course data.
 
-6. Open http://localhost:3000
+* 🤖 **AI-Powered Parsing**
+  Uses Gemini AI to extract course codes, slots, and timings from unstructured input.
 
-## Usage
+* ⚙️ **Fine-Grained Preferences**
+  Choose preferred professors for theory and lab sessions.
 
-1. **Sign Up/Login** - Create an account to save your data
-2. **Upload Data** - Import your course list via PDF, Excel, or manual entry
-3. **Select Courses** - Choose the courses you want to schedule
-4. **Set Preferences** - Select preferred faculty for theory and lab sections
-5. **Generate** - Click generate to create conflict-free timetables
-6. **Analyze** - Use AI chat to get insights about your schedules
-7. **Save Favorites** - Star your preferred timetables for easy access
+* 📅 **Conflict-Free Engine**
+  Generates up to 50 valid, clash-free timetable combinations.
 
-## Deployment
+* ⭐ **Favorites System**
+  Save and compare your best schedule options.
 
-Build for production:
+* 💬 **AI Timetable Insights**
+  Ask questions like:
+
+  * “Which schedule has the least workload?”
+  * “Where are my longest breaks?”
+
+* 📥 **Clean Export**
+  Download your timetable as an interactive HTML file.
+
+* 🔐 **Cloud Sync**
+  Firebase Authentication + Firestore ensures your schedules are saved and accessible anywhere.
+
+---
+
+## 🛠️ Tech Stack
+
+* **Frontend:** React 19 + TypeScript + Vite
+* **Styling:** TailwindCSS
+* **AI Engine:** Google Gemini 2.5 Flash
+* **Backend & Database:** Firebase (Auth + Firestore)
+* **File Parsing:** PDF.js + XLSX
+
+---
+
+## 🚀 Getting Started
+
+### ✅ Prerequisites
+
+* Node.js (v18 or higher)
+* Firebase project (Auth + Firestore enabled)
+* Gemini API Key → https://aistudio.google.com/app/apikey
+
+---
+
+### ⚙️ Installation
+
 ```bash
-npm run build
+# Clone the repo
+git clone https://github.com/rohith-m06/auto-scheduler.git
+
+# Move into project folder
+cd auto-scheduler
+
+# Install dependencies
+npm install
 ```
 
-Deploy to Vercel:
-```bash
-vercel --prod
+---
+
+### 🔑 Environment Setup
+
+Create a `.env.local` file in the root directory:
+
+```env
+VITE_GEMINI_API_KEY=your_gemini_api_key
 ```
 
-## License
+Also update your Firebase config inside:
 
-MIT
+```
+src/services/firebase.ts
+```
+
+---
+
+### ▶️ Run the App
+
+```bash
+npm run dev
+```
+
+Open in browser:
+
+```
+http://localhost:5173
+```
+
+---
+
+## 📖 How To Use
+
+1. 🔐 **Login / Sign Up**
+   Secure your account to store schedules.
+
+2. 📂 **Upload Data**
+   Upload Excel/PDF or paste course details.
+
+3. 🎯 **Select Courses**
+   Choose subjects for your semester.
+
+4. ⚙️ **Set Preferences**
+   Pick professors and preferred timings.
+
+5. 🚀 **Generate Schedule**
+   Let the engine create clash-free timetables.
+
+6. ⭐ **Compare & Save**
+   Bookmark your best options.
+
+7. 📥 **Export**
+   Download your final timetable.
+
+---
+
+## 📄 License
+
+This project is licensed under the **MIT License**.
+
+---
+
+## 💡 Future Improvements (Optional Section)
+
+* Mobile responsive optimization
+* Dark mode UI enhancements
+* Calendar sync (Google Calendar integration)
+* More advanced AI recommendations
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to fork the repo and submit a pull request.
+
+---
+
+## 👨‍💻 Author
+
+**Rohith M**
+GitHub: https://github.com/rohith-m06
+
+---
+
+## ⭐ Support
+
+If you found this useful, consider giving the repo a ⭐ on GitHub!

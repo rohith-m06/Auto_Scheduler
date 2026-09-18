@@ -4,8 +4,8 @@ import { CourseSelector } from './components/CourseSelector';
 import { FacultyPreferences } from './components/FacultyPreferences';
 import { TimetableGrid } from './components/TimetableGrid';
 import { Course, Timetable, ViewState, TimeSlotMapping, SavedTimetable } from './types';
-import { generateTimetables } from './services/scheduler';
-import { Calendar, ChevronRight, ChevronLeft, Sparkles, AlertCircle, Upload, LogOut, ArrowLeft, GraduationCap, Home, Heart, RotateCcw, Trash2, Send, Download } from 'lucide-react';
+import { generateTimetables, analyzeSchedulingConflicts, ConflictReport } from './services/scheduler';
+import { Calendar, ChevronRight, ChevronLeft, Sparkles, AlertCircle, Upload, LogOut, ArrowLeft, GraduationCap, Home, Heart, RotateCcw, Trash2, Send, Download, RefreshCw, XCircle } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { DataUpload } from './components/DataUpload';
 import { LabSlotPreferences } from './components/LabSlotPreferences';
@@ -26,6 +26,7 @@ const AppContent: React.FC = () => {
   const [preferences, setPreferences] = useState<{ [key: string]: string[] }>({});
   const [labPreferences, setLabPreferences] = useState<{ [key: string]: string[] }>({});
   const [generatedTimetables, setGeneratedTimetables] = useState<Timetable[]>([]);
+  const [conflictReport, setConflictReport] = useState<ConflictReport | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [resultsAiAnalysis, setResultsAiAnalysis] = useState<string>('');
   const [favoritesAiAnalysis, setFavoritesAiAnalysis] = useState<string>('');
@@ -77,9 +78,9 @@ const AppContent: React.FC = () => {
             setCourses(data.courses);
             setHasUploadedData(true);
           }
-          // Load slot timings
+          // Load slot timings (always merge on top of base SLOT_TIMINGS to ensure complete definitions)
           if (data.slotTimings && Object.keys(data.slotTimings).length > 0) {
-            setSlotTimings(data.slotTimings);
+            setSlotTimings({ ...SLOT_TIMINGS, ...data.slotTimings });
           }
           // Load saved timetables (favorites)
           if (data.savedTimetables && Array.isArray(data.savedTimetables) && data.savedTimetables.length > 0) {
@@ -258,6 +259,7 @@ const AppContent: React.FC = () => {
     setPreferences({});
     setLabPreferences({});
     setGeneratedTimetables([]);
+    setConflictReport(null);
     setCurrentPage(1);
     setResultsAiAnalysis('');
     setFavoritesAiAnalysis('');
@@ -265,24 +267,64 @@ const AppContent: React.FC = () => {
     setFavoritesChatHistory([]);
   };
 
+  const executeGeneration = (
+    currentSelected: Course[],
+    currentPrefs: { [key: string]: string[] },
+    currentLabPrefs: { [key: string]: string[] }
+  ) => {
+    try {
+      // Auto-rehydrate selected courses from the latest catalog to ensure fresh sections and options
+      const hydratedSelectedCourses = currentSelected.map(sc => {
+        const fresh = courses.find(c => c.code === sc.code);
+        return fresh ? {
+          ...fresh,
+          ...sc,
+          sections: fresh.sections || sc.sections,
+          theoryOptions: fresh.theoryOptions || sc.theoryOptions,
+          labOptions: fresh.labOptions || sc.labOptions,
+          linkedSections: fresh.linkedSections || sc.linkedSections,
+          hasLab: fresh.hasLab !== undefined ? fresh.hasLab : sc.hasLab,
+          hasLinkedLab: fresh.hasLinkedLab !== undefined ? fresh.hasLinkedLab : sc.hasLinkedLab
+        } : sc;
+      });
+
+      const effectiveSlots = { ...SLOT_TIMINGS, ...(slotTimings || {}) };
+      const results = generateTimetables(hydratedSelectedCourses, currentPrefs || {}, effectiveSlots, currentLabPrefs || {});
+      console.log(`[AutoScheduler] Generated ${results.length} timetables.`);
+      setGeneratedTimetables(results);
+      setCurrentPage(1);
+
+      if (results.length === 0) {
+        const report = analyzeSchedulingConflicts(hydratedSelectedCourses, currentPrefs || {}, effectiveSlots, currentLabPrefs || {});
+        setConflictReport(report);
+      } else {
+        setConflictReport(null);
+      }
+
+      setViewState(ViewState.RESULTS);
+      setResultsAiAnalysis('');
+      setResultsChatHistory([]);
+    } catch (err) {
+      console.error("[AutoScheduler] Error generating timetables:", err);
+      setGeneratedTimetables([]);
+      setCurrentPage(1);
+      setViewState(ViewState.RESULTS);
+    }
+  };
+
   const handleGenerate = () => {
     setViewState(ViewState.GENERATING);
     setTimeout(() => {
-      try {
-        const effectiveSlots = slotTimings && Object.keys(slotTimings).length > 0 ? slotTimings : SLOT_TIMINGS;
-        const results = generateTimetables(selectedCourses, preferences || {}, effectiveSlots, labPreferences || {});
-        console.log(`[AutoScheduler] Generated ${results.length} timetables.`);
-        setGeneratedTimetables(results);
-        setCurrentPage(1);
-        setViewState(ViewState.RESULTS);
-        setResultsAiAnalysis('');
-        setResultsChatHistory([]);
-      } catch (err) {
-        console.error("[AutoScheduler] Error generating timetables:", err);
-        setGeneratedTimetables([]);
-        setCurrentPage(1);
-        setViewState(ViewState.RESULTS);
-      }
+      executeGeneration(selectedCourses, preferences, labPreferences);
+    }, 50);
+  };
+
+  const handleClearFacultyFilters = () => {
+    setPreferences({});
+    setLabPreferences({});
+    setViewState(ViewState.GENERATING);
+    setTimeout(() => {
+      executeGeneration(selectedCourses, {}, {});
     }, 50);
   };
 
@@ -897,14 +939,89 @@ Keep each point to ONE short sentence only. Be direct and helpful.`;
                     {generatedTimetables.length > 0 ? `Found ${generatedTimetables.length} Valid Schedules` : "No Valid Schedules Found"}
                   </h2>
                   {generatedTimetables.length === 0 ? (
-                    <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-4 mt-2 text-sm space-y-1">
-                      <p className="font-semibold flex items-center gap-1.5"><AlertCircle className="w-4 h-4 text-amber-600" /> Mandatory Course Requirement</p>
-                      <p className="text-amber-700">
-                        Every selected course ({selectedCourses.length} courses) must be present in every generated timetable. No clash-free schedule could be formed that fits all {selectedCourses.length} courses with your current faculty filters.
-                      </p>
-                      <p className="text-amber-600 text-xs pt-1">
-                        Tip: Try selecting "Any Faculty" or choosing additional faculty options for courses with few sections.
-                      </p>
+                    <div className="mt-4 space-y-4 max-w-4xl">
+                      <div className="text-amber-900 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm space-y-2">
+                        <p className="font-semibold flex items-center gap-2 text-base text-amber-800">
+                          <AlertCircle className="w-5 h-5 text-amber-600" /> Mandatory Course Requirement
+                        </p>
+                        <p className="text-amber-800 leading-relaxed">
+                          Every selected course ({selectedCourses.length} courses) must be present in every generated timetable. No clash-free schedule could be formed that fits all {selectedCourses.length} courses with your current settings.
+                        </p>
+                        {conflictReport?.hasActiveFacultyFilters && (
+                          <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-amber-100/60 p-3 rounded-lg border border-amber-200">
+                            <div>
+                              <p className="font-medium text-amber-900 text-xs">Faculty filters are currently active</p>
+                              <p className="text-amber-700 text-xs">Some sections may be excluded because of your chosen professor preferences.</p>
+                            </div>
+                            <button
+                              onClick={handleClearFacultyFilters}
+                              className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all whitespace-nowrap"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" /> Clear Filters & Try Any Faculty
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Conflict Breakdown */}
+                      {conflictReport && (
+                        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5 space-y-4">
+                          <h3 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                            <XCircle className="w-5 h-5 text-red-500" /> Conflict Diagnostics
+                          </h3>
+
+                          {conflictReport.zeroOptionCourses.length > 0 && (
+                            <div className="space-y-2">
+                              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Courses with 0 Available Options</h4>
+                              <div className="divide-y divide-slate-100 border border-red-100 bg-red-50/50 rounded-lg p-3 space-y-2">
+                                {conflictReport.zeroOptionCourses.map((c, idx) => (
+                                  <div key={idx} className="text-xs text-red-800 flex items-start gap-2 pt-1 first:pt-0">
+                                    <span className="font-bold">{c.code}:</span>
+                                    <span>{c.reason}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {conflictReport.pairwiseConflicts.length > 0 && (
+                            <div className="space-y-2">
+                              <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Direct Time Slot Clashes</h4>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {conflictReport.pairwiseConflicts.map((c, idx) => (
+                                  <div key={idx} className="p-3.5 rounded-lg border border-red-200 bg-red-50/40 text-xs space-y-2">
+                                    <div className="flex items-center justify-between font-bold text-red-900 border-b border-red-200/60 pb-1.5">
+                                      <span>{c.course1} vs {c.course2}</span>
+                                      <span className="bg-red-200/80 text-red-800 px-2 py-0.5 rounded text-[10px]">{c.day} {c.timeRange}</span>
+                                    </div>
+                                    <div className="text-slate-600 space-y-1">
+                                      <p>• <strong>{c.course1}</strong>: Slot <code>{c.course1Slot}</code> ({c.course1Faculty})</p>
+                                      <p>• <strong>{c.course2}</strong>: Slot <code>{c.course2Slot}</code> ({c.course2Faculty})</p>
+                                    </div>
+                                    <p className="text-[11px] text-red-700 italic">These courses share the same slot or overlapping timing with no alternative clash-free section available.</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {conflictReport.zeroOptionCourses.length === 0 && conflictReport.pairwiseConflicts.length === 0 && (
+                            <div className="text-xs text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                              <p className="font-medium text-slate-800 mb-1">Weekly Grid Saturation:</p>
+                              <p>No single pair of courses directly clashes, but scheduling all {selectedCourses.length} courses simultaneously exceeds the available conflict-free slots across Monday–Friday.</p>
+                            </div>
+                          )}
+
+                          <div className="pt-2 flex items-center gap-3">
+                            <button
+                              onClick={() => setViewState(ViewState.SELECTION)}
+                              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all"
+                            >
+                              <ArrowLeft className="w-3.5 h-3.5" /> Adjust Selected Courses
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <p className="text-sm text-slate-500 mt-1">

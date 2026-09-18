@@ -142,7 +142,28 @@ export const isOverlap = (slot1: string, slot2: string, slotTimings: TimeSlotMap
 // Maximum number of timetables to generate (safety cap)
 const MAX_TIMETABLES = 3000;
 // Maximum search exploration steps to prevent browser locking on heavy combinatorial conflicts
-const MAX_SEARCH_STEPS = 80000;
+const MAX_SEARCH_STEPS = 300000;
+
+export interface ConflictItem {
+  course1: string;
+  course1Slot: string;
+  course1Faculty: string;
+  course1Type: 'Theory' | 'Lab';
+  course2: string;
+  course2Slot: string;
+  course2Faculty: string;
+  course2Type: 'Theory' | 'Lab';
+  day: string;
+  timeRange: string;
+}
+
+export interface ConflictReport {
+  hasClash: boolean;
+  zeroOptionCourses: { code: string; reason: string }[];
+  pairwiseConflicts: ConflictItem[];
+  hasActiveFacultyFilters: boolean;
+  summary: string;
+}
 
 // Extract unique theory options (faculty + slot combinations)
 const getTheoryOptions = (sections: Section[]): { faculty: string; slot: string }[] => {
@@ -182,27 +203,45 @@ const getLabOptions = (sections: Section[]): { faculty: string; slot: string }[]
   return options;
 };
 
-export const generateTimetables = (
+// Prepare course data with pre-resolved numeric intervals and resilient auto-healing
+export interface ResolvedCourseOption {
+  code: string;
+  hasLinkedLab: boolean;
+  linkedOptions: {
+    faculty: string;
+    theorySlot: string;
+    labSlot: string;
+    labFaculty: string;
+    theoryIntervals: NumericInterval[];
+    labIntervals: NumericInterval[];
+    intervals: NumericInterval[];
+  }[];
+  theoryOptions: { faculty: string; slot: string; intervals: NumericInterval[] }[];
+  labOptions: { faculty: string; slot: string; intervals: NumericInterval[] }[];
+  hasLab: boolean;
+  hasTheory: boolean;
+}
+
+export const prepareCourseData = (
   selectedCourses: Course[],
   facultyPreferences: { [courseCode: string]: string[] } = {},
   slotTimings: TimeSlotMapping = {},
   labFacultyPreferences: { [courseCode: string]: string[] } = {}
-): Timetable[] => {
-  if (!selectedCourses || selectedCourses.length === 0) return [];
+): ResolvedCourseOption[] => {
+  const effectiveSlots = { ...SLOT_TIMINGS, ...(slotTimings || {}) };
 
-  // If slotTimings is empty or not passed, automatically fallback to complete standard SLOT_TIMINGS
-  const effectiveSlots = (slotTimings && Object.keys(slotTimings).length > 0) ? slotTimings : SLOT_TIMINGS;
-
-  const validTimetables: Timetable[] = [];
-
-  // 1. Build course options with pre-resolved numeric timings for instantaneous collision checks
-  const courseData = selectedCourses.map(course => {
+  return selectedCourses.map(course => {
     const preferredTheoryFaculty = facultyPreferences ? facultyPreferences[course.code] : undefined;
     const preferredLabFaculty = labFacultyPreferences ? labFacultyPreferences[course.code] : undefined;
-    
+
     // Check if this course has linked theory+lab (P=4)
-    if (course.hasLinkedLab && course.linkedSections && course.linkedSections.length > 0) {
-      let linked = course.linkedSections;
+    // Auto-extract from course.sections if linkedSections is empty
+    const rawLinkedSections = (course.linkedSections && course.linkedSections.length > 0)
+      ? course.linkedSections
+      : (course.hasLinkedLab && course.sections ? course.sections.filter(s => s.theorySlot && s.labSlot) : []);
+
+    if (course.hasLinkedLab && rawLinkedSections.length > 0) {
+      let linked = rawLinkedSections;
       if (preferredTheoryFaculty && preferredTheoryFaculty.length > 0) {
         linked = linked.filter(s => preferredTheoryFaculty.includes(s.faculty));
       }
@@ -223,7 +262,6 @@ export const generateTimetables = (
             labFaculty: s.labFaculty || s.faculty,
             theoryIntervals,
             labIntervals,
-            // Combined intervals for atomic placement
             intervals: [...theoryIntervals, ...labIntervals]
           };
         })
@@ -274,27 +312,31 @@ export const generateTimetables = (
       }))
       .filter(l => l.intervals.length > 0);
 
-    const hasLab = course.hasLab !== undefined ? course.hasLab : (labOptions.length > 0 || (course.labOptions && course.labOptions.length > 0));
+    // Resilient flag detection: only mark hasLab if lab options actually exist in the data!
+    const hasLab = rawLabOptions.length > 0 && course.hasLab !== false;
     const hasTheory = rawTheoryOptions.length > 0 || !hasLab;
 
     return {
       code: course.code,
       hasLinkedLab: false,
-      linkedOptions: [] as {
-        faculty: string;
-        theorySlot: string;
-        labSlot: string;
-        labFaculty: string;
-        theoryIntervals: NumericInterval[];
-        labIntervals: NumericInterval[];
-        intervals: NumericInterval[];
-      }[],
+      linkedOptions: [],
       theoryOptions,
       labOptions,
       hasLab,
       hasTheory
     };
   });
+};
+
+export const generateTimetables = (
+  selectedCourses: Course[],
+  facultyPreferences: { [courseCode: string]: string[] } = {},
+  slotTimings: TimeSlotMapping = {},
+  labFacultyPreferences: { [courseCode: string]: string[] } = {}
+): Timetable[] => {
+  if (!selectedCourses || selectedCourses.length === 0) return [];
+
+  const courseData = prepareCourseData(selectedCourses, facultyPreferences, slotTimings, labFacultyPreferences);
 
   // Strict verification: if ANY selected course has 0 valid options, return 0 timetables immediately
   // (Mandatory all-course constraint: we can never leave out any selected course)
@@ -324,6 +366,7 @@ export const generateTimetables = (
     return countA - countB;
   });
 
+  const validTimetables: Timetable[] = [];
   const seenTimetables = new Set<string>();
   let steps = 0;
 
@@ -454,4 +497,167 @@ export const generateTimetables = (
   backtrack(0, [], []);
 
   return validTimetables;
+};
+
+// Detailed conflict analyzer when 0 timetables are formed
+export const analyzeSchedulingConflicts = (
+  selectedCourses: Course[],
+  facultyPreferences: { [courseCode: string]: string[] } = {},
+  slotTimings: TimeSlotMapping = {},
+  labFacultyPreferences: { [courseCode: string]: string[] } = {}
+): ConflictReport => {
+  const effectiveSlots = { ...SLOT_TIMINGS, ...(slotTimings || {}) };
+  const hasActiveFacultyFilters = Object.values(facultyPreferences || {}).some(f => f && f.length > 0) ||
+    Object.values(labFacultyPreferences || {}).some(l => l && l.length > 0);
+
+  const filteredData = prepareCourseData(selectedCourses, facultyPreferences, effectiveSlots, labFacultyPreferences);
+  const unfilteredData = prepareCourseData(selectedCourses, {}, effectiveSlots, {});
+
+  const zeroOptionCourses: { code: string; reason: string }[] = [];
+
+  for (let i = 0; i < selectedCourses.length; i++) {
+    const course = selectedCourses[i];
+    const filtered = filteredData[i];
+    const unfiltered = unfilteredData[i];
+
+    const hasFilteredOptions = filtered.hasLinkedLab
+      ? filtered.linkedOptions.length > 0
+      : ((!filtered.hasTheory || filtered.theoryOptions.length > 0) && (!filtered.hasLab || filtered.labOptions.length > 0));
+
+    const hasUnfilteredOptions = unfiltered.hasLinkedLab
+      ? unfiltered.linkedOptions.length > 0
+      : ((!unfiltered.hasTheory || unfiltered.theoryOptions.length > 0) && (!unfiltered.hasLab || unfiltered.labOptions.length > 0));
+
+    if (!hasFilteredOptions) {
+      if (hasUnfilteredOptions) {
+        const filters = (facultyPreferences[course.code] || []).concat(labFacultyPreferences[course.code] || []);
+        zeroOptionCourses.push({
+          code: course.code,
+          reason: `Filtered out by chosen faculty (${filters.join(', ')}). Resetting faculty preferences restores ${unfiltered.theoryOptions.length + unfiltered.labOptions.length + unfiltered.linkedOptions.length} section(s).`
+        });
+      } else {
+        zeroOptionCourses.push({
+          code: course.code,
+          reason: `No valid sections found in dataset matching slot timing definitions.`
+        });
+      }
+    }
+  }
+
+  // Pairwise conflicts: check if any two courses guarantee a conflict across all available branches
+  const pairwiseConflicts: ConflictItem[] = [];
+  const formatTime = (min: number) => {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const displayH = h % 12 === 0 ? 12 : h % 12;
+    return `${displayH}:${m.toString().padStart(2, '0')} ${ampm}`;
+  };
+
+  for (let i = 0; i < filteredData.length; i++) {
+    for (let j = i + 1; j < filteredData.length; j++) {
+      const c1 = filteredData[i];
+      const c2 = filteredData[j];
+
+      const getBranches = (c: ResolvedCourseOption) => {
+        if (c.hasLinkedLab) {
+          return c.linkedOptions.map(l => ({
+            desc: `Linked (${l.theorySlot} + ${l.labSlot})`,
+            intervals: l.intervals,
+            faculty: l.faculty,
+            slot: `${l.theorySlot}+${l.labSlot}`,
+            type: 'Theory' as const
+          }));
+        }
+        const branches = [];
+        if (!c.hasLab) {
+          for (const t of c.theoryOptions) {
+            branches.push({ desc: `Theory ${t.slot}`, intervals: t.intervals, faculty: t.faculty, slot: t.slot, type: 'Theory' as const });
+          }
+        } else if (!c.hasTheory) {
+          for (const l of c.labOptions) {
+            branches.push({ desc: `Lab ${l.slot}`, intervals: l.intervals, faculty: l.faculty, slot: l.slot, type: 'Lab' as const });
+          }
+        } else {
+          for (const t of c.theoryOptions) {
+            for (const l of c.labOptions) {
+              if (!hasIntervalConflict(t.intervals, l.intervals)) {
+                branches.push({
+                  desc: `Theory ${t.slot} & Lab ${l.slot}`,
+                  intervals: [...t.intervals, ...l.intervals],
+                  faculty: `${t.faculty} / ${l.faculty}`,
+                  slot: `${t.slot}, ${l.slot}`,
+                  type: 'Theory' as const
+                });
+              }
+            }
+          }
+        }
+        return branches;
+      };
+
+      const branches1 = getBranches(c1);
+      const branches2 = getBranches(c2);
+
+      if (branches1.length > 0 && branches2.length > 0) {
+        let allClash = true;
+        let sampleConflict: ConflictItem | null = null;
+
+        for (const b1 of branches1) {
+          for (const b2 of branches2) {
+            const hasConflict = hasIntervalConflict(b1.intervals, b2.intervals);
+            if (!hasConflict) {
+              allClash = false;
+              break;
+            } else if (!sampleConflict) {
+              for (const i1 of b1.intervals) {
+                for (const i2 of b2.intervals) {
+                  if (i1.day === i2.day && i1.start < i2.end && i2.start < i1.end) {
+                    const clashStart = Math.max(i1.start, i2.start);
+                    const clashEnd = Math.min(i1.end, i2.end);
+                    sampleConflict = {
+                      course1: c1.code,
+                      course1Slot: b1.slot,
+                      course1Faculty: b1.faculty,
+                      course1Type: b1.type,
+                      course2: c2.code,
+                      course2Slot: b2.slot,
+                      course2Faculty: b2.faculty,
+                      course2Type: b2.type,
+                      day: i1.day,
+                      timeRange: `${formatTime(clashStart)} - ${formatTime(clashEnd)}`
+                    };
+                    break;
+                  }
+                }
+                if (sampleConflict) break;
+              }
+            }
+          }
+          if (!allClash) break;
+        }
+
+        if (allClash && sampleConflict) {
+          pairwiseConflicts.push(sampleConflict);
+        }
+      }
+    }
+  }
+
+  let summary = '';
+  if (zeroOptionCourses.length > 0) {
+    summary = `${zeroOptionCourses.length} course(s) have 0 available sections under your current settings.`;
+  } else if (pairwiseConflicts.length > 0) {
+    summary = `Direct time slot clash detected between ${pairwiseConflicts.length} course pair(s).`;
+  } else {
+    summary = `No single pair directly conflicts, but combining all ${selectedCourses.length} courses simultaneously exhausts available slot combinations.`;
+  }
+
+  return {
+    hasClash: zeroOptionCourses.length > 0 || pairwiseConflicts.length > 0,
+    zeroOptionCourses,
+    pairwiseConflicts,
+    hasActiveFacultyFilters,
+    summary
+  };
 };

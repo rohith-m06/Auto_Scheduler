@@ -1,4 +1,11 @@
-import { Course, Section, Timetable, TimeSlotMapping, ScheduledCourse } from '../types';
+import { Course, Section, Timetable, TimeSlotMapping, ScheduledCourse, LinkedSection } from '../types';
+import { SLOT_TIMINGS } from '../constants';
+
+export interface NumericInterval {
+  day: string;
+  start: number;
+  end: number;
+}
 
 const parseTime = (time: string): number => {
   if (!time) return 0;
@@ -22,13 +29,23 @@ const parseTime = (time: string): number => {
   return hours * 60 + minutes;
 };
 
+// Helper to normalize slot codes (e.g., "L23-L24" -> "L23+L24", " B1 " -> "B1")
+export const normalizeSlotCode = (slotCode: string): string => {
+  if (!slotCode) return '';
+  let cleaned = slotCode.replace(/[()]/g, '').trim();
+  // Normalize hyphens between alphanumeric components
+  cleaned = cleaned.replace(/([A-Za-z0-9]+)\s*-\s*([A-Za-z0-9]+)/g, '$1+$2');
+  // Normalize spaces around + and ,
+  cleaned = cleaned.replace(/\s*\+\s*/g, '+').replace(/\s*,\s*/g, ', ');
+  return cleaned;
+};
+
 // Helper to resolve timings from potentially complex slot codes (e.g., "L13+L14, L25+L26")
-const resolveTimings = (slotCode: string, slotTimings: TimeSlotMapping) => {
-  if (!slotCode) return [];
+export const resolveTimings = (slotCode: string, slotTimings: TimeSlotMapping) => {
+  if (!slotCode || !slotTimings) return [];
   
-  // First, split by comma to separate distinct sessions (e.g. for P=4)
-  const cleaned = slotCode.replace(/[()]/g, '');
-  const sessions = cleaned.split(',').map(s => s.trim());
+  const normalizedCode = normalizeSlotCode(slotCode);
+  const sessions = normalizedCode.split(',').map(s => s.trim());
   
   const allTimings = [];
   for (const session of sessions) {
@@ -40,14 +57,14 @@ const resolveTimings = (slotCode: string, slotTimings: TimeSlotMapping) => {
       continue;
     }
     
-    // 2. Try normalized match (remove spaces/plus for "L1+L2")
-    const normalized = session.replace(/\s+/g, '');
-    if (slotTimings[normalized]) {
-      allTimings.push(...slotTimings[normalized]);
+    // 2. Try normalized match (remove all spaces)
+    const noSpaces = session.replace(/\s+/g, '');
+    if (slotTimings[noSpaces]) {
+      allTimings.push(...slotTimings[noSpaces]);
       continue;
     }
 
-    // 3. Fallback: split by plus and search (only if necessary)
+    // 3. Fallback: split by plus and search
     const subParts = session.split('+').map(p => p.trim());
     for (const part of subParts) {
       if (slotTimings[part]) {
@@ -55,7 +72,8 @@ const resolveTimings = (slotCode: string, slotTimings: TimeSlotMapping) => {
       } else {
         // Search keys for partial match (e.g., finding "L1+L2" when part is "L1")
         for (const [key, t] of Object.entries(slotTimings)) {
-          if (key.split(/[,+]/).map(k => k.trim()).includes(part)) {
+          const keyTokens = key.split(/[,+]/).map(k => k.trim());
+          if (keyTokens.includes(part)) {
             allTimings.push(...t);
             break;
           }
@@ -78,41 +96,53 @@ const resolveTimings = (slotCode: string, slotTimings: TimeSlotMapping) => {
   return uniqueTimings;
 };
 
-// Check if two slots overlap
-const isOverlap = (slot1: string, slot2: string, slotTimings: TimeSlotMapping): boolean => {
-  if (!slot1 || !slot2) return false;
-  if (slot1 === slot2) return true;
+// Pre-resolve slot string to numeric minute intervals for fast integer collision checks
+export const resolveNumericTimings = (slotCode: string, slotTimings: TimeSlotMapping): NumericInterval[] => {
+  const timings = resolveTimings(slotCode, slotTimings);
+  return timings.map(t => ({
+    day: t.day,
+    start: parseTime(t.start),
+    end: parseTime(t.end)
+  }));
+};
 
-  const times1 = resolveTimings(slot1, slotTimings);
-  const times2 = resolveTimings(slot2, slotTimings);
-
-  if (times1.length === 0 || times2.length === 0) return false;
-
-  for (const t1 of times1) {
-    for (const t2 of times2) {
-      if (t1.day === t2.day) {
-        const s1 = parseTime(t1.start);
-        const e1 = parseTime(t1.end);
-        const s2 = parseTime(t2.start);
-        const e2 = parseTime(t2.end);
-
-        if (s1 < e2 && s2 < e1) return true;
+// High-performance integer interval clash detection (O(N) with tiny N, no string operations)
+export const hasIntervalConflict = (
+  slotIntervals: NumericInterval[],
+  occupiedIntervals: NumericInterval[]
+): boolean => {
+  for (let i = 0; i < slotIntervals.length; i++) {
+    const t1 = slotIntervals[i];
+    for (let j = 0; j < occupiedIntervals.length; j++) {
+      const t2 = occupiedIntervals[j];
+      if (t1.day === t2.day && t1.start < t2.end && t2.start < t1.end) {
+        return true;
       }
     }
   }
   return false;
 };
 
-// Check if a slot conflicts with any in the occupied list
-const hasSlotConflict = (slot: string, occupiedSlots: string[], slotTimings: TimeSlotMapping): boolean => {
-  for (const occupied of occupiedSlots) {
-    if (isOverlap(slot, occupied, slotTimings)) return true;
-  }
-  return false;
+// Check if two slots overlap in time (backward compatibility export)
+export const isOverlap = (slot1: string, slot2: string, slotTimings: TimeSlotMapping): boolean => {
+  if (!slot1 || !slot2) return false;
+  
+  const s1Norm = normalizeSlotCode(slot1);
+  const s2Norm = normalizeSlotCode(slot2);
+  if (s1Norm.toUpperCase() === s2Norm.toUpperCase()) return true;
+
+  const times1 = resolveNumericTimings(s1Norm, slotTimings);
+  const times2 = resolveNumericTimings(s2Norm, slotTimings);
+
+  if (times1.length === 0 || times2.length === 0) return true;
+
+  return hasIntervalConflict(times1, times2);
 };
 
-// Maximum number of timetables to generate - set high to get all possibilities
-const MAX_TIMETABLES = 3500;
+// Maximum number of timetables to generate (safety cap)
+const MAX_TIMETABLES = 3000;
+// Maximum search exploration steps to prevent browser locking on heavy combinatorial conflicts
+const MAX_SEARCH_STEPS = 80000;
 
 // Extract unique theory options (faculty + slot combinations)
 const getTheoryOptions = (sections: Section[]): { faculty: string; slot: string }[] => {
@@ -121,10 +151,11 @@ const getTheoryOptions = (sections: Section[]): { faculty: string; slot: string 
   
   for (const section of sections) {
     if (section.theorySlot) {
-      const key = `${section.faculty}-${section.theorySlot}`;
+      const normSlot = normalizeSlotCode(section.theorySlot);
+      const key = `${section.faculty}-${normSlot}`;
       if (!seen.has(key)) {
         seen.add(key);
-        options.push({ faculty: section.faculty, slot: section.theorySlot });
+        options.push({ faculty: section.faculty, slot: normSlot });
       }
     }
   }
@@ -138,15 +169,13 @@ const getLabOptions = (sections: Section[]): { faculty: string; slot: string }[]
   
   for (const section of sections) {
     if (section.labSlot) {
-      // Use labFaculty if available, else faculty
       const faculty = section.labFaculty || section.faculty;
-      // We take the labSlot as-is from the row. 
-      // If it's P=4, the data already contains "L1+L2, L21+L22" in this field.
-      const key = `${faculty}-${section.labSlot}`;
+      const normSlot = normalizeSlotCode(section.labSlot);
+      const key = `${faculty}-${normSlot}`;
       
       if (!seen.has(key)) {
         seen.add(key);
-        options.push({ faculty, slot: section.labSlot });
+        options.push({ faculty, slot: normSlot });
       }
     }
   }
@@ -155,39 +184,111 @@ const getLabOptions = (sections: Section[]): { faculty: string; slot: string }[]
 
 export const generateTimetables = (
   selectedCourses: Course[],
-  facultyPreferences: { [courseCode: string]: string[] },
-  slotTimings: TimeSlotMapping,
+  facultyPreferences: { [courseCode: string]: string[] } = {},
+  slotTimings: TimeSlotMapping = {},
   labFacultyPreferences: { [courseCode: string]: string[] } = {}
 ): Timetable[] => {
+  if (!selectedCourses || selectedCourses.length === 0) return [];
+
+  // If slotTimings is empty or not passed, automatically fallback to complete standard SLOT_TIMINGS
+  const effectiveSlots = (slotTimings && Object.keys(slotTimings).length > 0) ? slotTimings : SLOT_TIMINGS;
+
   const validTimetables: Timetable[] = [];
 
-  // Build course options with INDEPENDENT theory and lab choices
+  // 1. Build course options with pre-resolved numeric timings for instantaneous collision checks
   const courseData = selectedCourses.map(course => {
-    const preferredTheoryFaculty = facultyPreferences[course.code];
-    const preferredLabFaculty = labFacultyPreferences[course.code];
+    const preferredTheoryFaculty = facultyPreferences ? facultyPreferences[course.code] : undefined;
+    const preferredLabFaculty = labFacultyPreferences ? labFacultyPreferences[course.code] : undefined;
     
-    // THEORY: Get ALL sections for this course first to ensure we see every slot
-    let theorySections = course.sections;
-    // Apply filter ONLY if preferences are selected, and ensure EVERY slot for those teachers is caught
-    if (preferredTheoryFaculty && preferredTheoryFaculty.length > 0) {
-      theorySections = course.sections.filter(s => preferredTheoryFaculty.includes(s.faculty));
-    }
-    const theoryOptions = getTheoryOptions(theorySections);
+    // Check if this course has linked theory+lab (P=4)
+    if (course.hasLinkedLab && course.linkedSections && course.linkedSections.length > 0) {
+      let linked = course.linkedSections;
+      if (preferredTheoryFaculty && preferredTheoryFaculty.length > 0) {
+        linked = linked.filter(s => preferredTheoryFaculty.includes(s.faculty));
+      }
+      if (preferredLabFaculty && preferredLabFaculty.length > 0) {
+        linked = linked.filter(s => preferredLabFaculty.includes(s.labFaculty || s.faculty));
+      }
 
-    // LAB: Get ALL sections that have labs for this course
-    let labSections = course.sections.filter(s => s.labSlot);
-    // Apply filter ONLY if preferences are selected, and ensure EVERY connected slot package is caught
-    if (preferredLabFaculty && preferredLabFaculty.length > 0) {
-      labSections = labSections.filter(s => 
-        preferredLabFaculty.includes(s.labFaculty || s.faculty)
-      );
+      const validLinked = linked
+        .map(s => {
+          const theorySlot = normalizeSlotCode(s.theorySlot);
+          const labSlot = normalizeSlotCode(s.labSlot);
+          const theoryIntervals = resolveNumericTimings(theorySlot, effectiveSlots);
+          const labIntervals = resolveNumericTimings(labSlot, effectiveSlots);
+          return {
+            faculty: s.faculty,
+            theorySlot,
+            labSlot,
+            labFaculty: s.labFaculty || s.faculty,
+            theoryIntervals,
+            labIntervals,
+            // Combined intervals for atomic placement
+            intervals: [...theoryIntervals, ...labIntervals]
+          };
+        })
+        .filter(s => s.theoryIntervals.length > 0 && s.labIntervals.length > 0 && !hasIntervalConflict(s.theoryIntervals, s.labIntervals));
+
+      return {
+        code: course.code,
+        hasLinkedLab: true,
+        linkedOptions: validLinked,
+        theoryOptions: [],
+        labOptions: [],
+        hasLab: true,
+        hasTheory: true
+      };
     }
-    const labOptions = getLabOptions(labSections);
-    const hasLab = labOptions.length > 0;
-    const hasTheory = theoryOptions.length > 0;
+
+    // THEORY: Support options defined in course.theoryOptions or extract from course.sections
+    let rawTheoryOptions: { faculty: string; slot: string }[] = [];
+    if (course.theoryOptions && Array.isArray(course.theoryOptions) && course.theoryOptions.length > 0) {
+      rawTheoryOptions = course.theoryOptions.map(t => ({ faculty: t.faculty || 'TBA', slot: normalizeSlotCode(t.slot) }));
+    } else if (course.sections && Array.isArray(course.sections) && course.sections.length > 0) {
+      rawTheoryOptions = getTheoryOptions(course.sections);
+    }
+    if (preferredTheoryFaculty && preferredTheoryFaculty.length > 0) {
+      rawTheoryOptions = rawTheoryOptions.filter(t => preferredTheoryFaculty.includes(t.faculty));
+    }
+    const theoryOptions = rawTheoryOptions
+      .map(t => ({
+        ...t,
+        intervals: resolveNumericTimings(t.slot, effectiveSlots)
+      }))
+      .filter(t => t.intervals.length > 0);
+
+    // LAB: Support options defined in course.labOptions or extract from course.sections
+    let rawLabOptions: { faculty: string; slot: string }[] = [];
+    if (course.labOptions && Array.isArray(course.labOptions) && course.labOptions.length > 0) {
+      rawLabOptions = course.labOptions.map(l => ({ faculty: l.faculty || 'TBA', slot: normalizeSlotCode(l.slot) }));
+    } else if (course.sections && Array.isArray(course.sections) && course.sections.length > 0) {
+      rawLabOptions = getLabOptions(course.sections);
+    }
+    if (preferredLabFaculty && preferredLabFaculty.length > 0) {
+      rawLabOptions = rawLabOptions.filter(l => preferredLabFaculty.includes(l.faculty));
+    }
+    const labOptions = rawLabOptions
+      .map(l => ({
+        ...l,
+        intervals: resolveNumericTimings(l.slot, effectiveSlots)
+      }))
+      .filter(l => l.intervals.length > 0);
+
+    const hasLab = course.hasLab !== undefined ? course.hasLab : (labOptions.length > 0 || (course.labOptions && course.labOptions.length > 0));
+    const hasTheory = rawTheoryOptions.length > 0 || !hasLab;
 
     return {
       code: course.code,
+      hasLinkedLab: false,
+      linkedOptions: [] as {
+        faculty: string;
+        theorySlot: string;
+        labSlot: string;
+        labFaculty: string;
+        theoryIntervals: NumericInterval[];
+        labIntervals: NumericInterval[];
+        intervals: NumericInterval[];
+      }[],
       theoryOptions,
       labOptions,
       hasLab,
@@ -195,25 +296,47 @@ export const generateTimetables = (
     };
   });
 
-  // Check if any course has no options at all
-  const coursesWithNoOptions = courseData.filter(c => 
-    (c.hasTheory && c.theoryOptions.length === 0) || 
-    (c.hasLab && c.labOptions.length === 0) ||
-    (!c.hasTheory && !c.hasLab)
-  );
-  if (coursesWithNoOptions.length > 0) return [];
+  // Strict verification: if ANY selected course has 0 valid options, return 0 timetables immediately
+  // (Mandatory all-course constraint: we can never leave out any selected course)
+  const coursesWithNoOptions = courseData.filter(c => {
+    if (c.hasLinkedLab) {
+      return c.linkedOptions.length === 0;
+    }
+    if (c.hasTheory && c.theoryOptions.length === 0) return true;
+    if (c.hasLab && c.labOptions.length === 0) return true;
+    if (!c.hasTheory && !c.hasLab) return true;
+    return false;
+  });
 
-  // Use Set to track unique timetables and prevent duplicates
+  if (coursesWithNoOptions.length > 0) {
+    console.warn(
+      `[AutoScheduler] Cannot generate timetable: Course(s) with 0 valid options:`,
+      coursesWithNoOptions.map(c => c.code)
+    );
+    return [];
+  }
+
+  // Most Constrained Variable (MCV) Heuristic:
+  // Sort courses by fewest available branches first to prune the search space by orders of magnitude
+  courseData.sort((a, b) => {
+    const countA = a.hasLinkedLab ? a.linkedOptions.length : (a.hasLab ? a.theoryOptions.length * Math.max(1, a.labOptions.length) : a.theoryOptions.length);
+    const countB = b.hasLinkedLab ? b.linkedOptions.length : (b.hasLab ? b.theoryOptions.length * Math.max(1, b.labOptions.length) : b.theoryOptions.length);
+    return countA - countB;
+  });
+
   const seenTimetables = new Set<string>();
+  let steps = 0;
 
-  // Backtracking with DECOUPLED theory and lab selection
+  // Ultra-fast backtracking with pre-resolved numeric intervals
   const backtrack = (
     courseIndex: number,
     currentSchedule: ScheduledCourse[],
-    occupiedSlots: string[]
+    occupiedIntervals: NumericInterval[]
   ) => {
     if (validTimetables.length >= MAX_TIMETABLES) return;
+    if (++steps >= MAX_SEARCH_STEPS) return;
 
+    // A combination is ONLY valid when ALL selected courses have been successfully scheduled
     if (courseIndex === courseData.length) {
       const timetableKey = currentSchedule
         .map(sc => `${sc.courseCode}:${sc.theoryFaculty || 'none'}:${sc.theorySlot || 'none'}:${sc.labFaculty || 'none'}:${sc.labSlot || 'none'}`)
@@ -223,10 +346,11 @@ export const generateTimetables = (
       if (seenTimetables.has(timetableKey)) return;
       seenTimetables.add(timetableKey);
 
+      // Deep copy sections and scheduled courses
       const sections: Section[] = currentSchedule.map(sc => ({
-        id: `${sc.courseCode}-${sc.theoryFaculty || sc.labFaculty}-${sc.theorySlot || sc.labSlot}`,
+        id: `${sc.courseCode}-${sc.theoryFaculty || sc.labFaculty || 'TBA'}-${sc.theorySlot || sc.labSlot || 'SLOT'}`,
         courseCode: sc.courseCode,
-        faculty: sc.theoryFaculty || 'TBA',
+        faculty: sc.theoryFaculty || sc.labFaculty || 'TBA',
         theorySlot: sc.theorySlot || '',
         labSlot: sc.labSlot,
         labFaculty: sc.labFaculty
@@ -235,17 +359,41 @@ export const generateTimetables = (
       validTimetables.push({
         id: validTimetables.length + 1,
         sections,
-        scheduledCourses: [...currentSchedule]
+        scheduledCourses: currentSchedule.map(sc => ({ ...sc }))
       });
       return;
     }
 
     const course = courseData[courseIndex];
 
-    // If course has only lab
+    // Branch A: Linked Labs (P=4)
+    if (course.hasLinkedLab) {
+      for (let i = 0; i < course.linkedOptions.length; i++) {
+        const linked = course.linkedOptions[i];
+        if (hasIntervalConflict(linked.intervals, occupiedIntervals)) continue;
+
+        backtrack(
+          courseIndex + 1,
+          [...currentSchedule, {
+            courseCode: course.code,
+            theorySlot: linked.theorySlot,
+            theoryFaculty: linked.faculty,
+            labSlot: linked.labSlot,
+            labFaculty: linked.labFaculty
+          }],
+          [...occupiedIntervals, ...linked.intervals]
+        );
+        if (validTimetables.length >= MAX_TIMETABLES) return;
+      }
+      return;
+    }
+
+    // Branch B: Pure Lab-only courses (no theory)
     if (!course.hasTheory && course.hasLab) {
-      for (const lab of course.labOptions) {
-        if (hasSlotConflict(lab.slot, occupiedSlots, slotTimings)) continue;
+      for (let i = 0; i < course.labOptions.length; i++) {
+        const lab = course.labOptions[i];
+        if (hasIntervalConflict(lab.intervals, occupiedIntervals)) continue;
+
         backtrack(
           courseIndex + 1,
           [...currentSchedule, {
@@ -255,17 +403,20 @@ export const generateTimetables = (
             labSlot: lab.slot,
             labFaculty: lab.faculty
           }],
-          [...occupiedSlots, lab.slot]
+          [...occupiedIntervals, ...lab.intervals]
         );
+        if (validTimetables.length >= MAX_TIMETABLES) return;
       }
       return;
     }
 
-    // Try each theory option
-    for (const theory of course.theoryOptions) {
-      if (hasSlotConflict(theory.slot, occupiedSlots, slotTimings)) continue;
+    // Branch C: Standard courses with theory (and optional independent lab)
+    for (let i = 0; i < course.theoryOptions.length; i++) {
+      const theory = course.theoryOptions[i];
+      if (hasIntervalConflict(theory.intervals, occupiedIntervals)) continue;
 
       if (!course.hasLab) {
+        // Theory only course
         backtrack(
           courseIndex + 1,
           [...currentSchedule, {
@@ -273,14 +424,15 @@ export const generateTimetables = (
             theorySlot: theory.slot,
             theoryFaculty: theory.faculty
           }],
-          [...occupiedSlots, theory.slot]
+          [...occupiedIntervals, ...theory.intervals]
         );
+        if (validTimetables.length >= MAX_TIMETABLES) return;
       } else {
-        // Try each lab option INDEPENDENTLY
-        for (const lab of course.labOptions) {
-          // Check for conflict with existing occupied slots AND the current theory slot
-          if (hasSlotConflict(lab.slot, occupiedSlots, slotTimings)) continue;
-          if (isOverlap(theory.slot, lab.slot, slotTimings)) continue;
+        // Independent lab course: try each valid lab option
+        for (let j = 0; j < course.labOptions.length; j++) {
+          const lab = course.labOptions[j];
+          if (hasIntervalConflict(lab.intervals, occupiedIntervals)) continue;
+          if (hasIntervalConflict(theory.intervals, lab.intervals)) continue;
 
           backtrack(
             courseIndex + 1,
@@ -291,8 +443,9 @@ export const generateTimetables = (
               labSlot: lab.slot,
               labFaculty: lab.faculty
             }],
-            [...occupiedSlots, theory.slot, lab.slot]
+            [...occupiedIntervals, ...theory.intervals, ...lab.intervals]
           );
+          if (validTimetables.length >= MAX_TIMETABLES) return;
         }
       }
     }

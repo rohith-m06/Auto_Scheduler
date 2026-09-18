@@ -16,7 +16,8 @@ export const TimetableGrid: React.FC<Props> = ({ timetable, slotTimings }) => {
     if (!slotCode) return [];
     
     // First, split by comma to separate distinct sessions (e.g. for P=4)
-    const cleaned = slotCode.replace(/[()]/g, '');
+    let cleaned = slotCode.replace(/[()]/g, '').trim();
+    cleaned = cleaned.replace(/([A-Za-z0-9]+)\s*-\s*([A-Za-z0-9]+)/g, '$1+$2');
     const sessions = cleaned.split(',').map(s => s.trim());
     
     const allTimings = [];

@@ -5,7 +5,7 @@ import { FacultyPreferences } from './components/FacultyPreferences';
 import { TimetableGrid } from './components/TimetableGrid';
 import { Course, Timetable, ViewState, TimeSlotMapping, SavedTimetable } from './types';
 import { generateTimetables } from './services/scheduler';
-import { Calendar, ChevronRight, Sparkles, AlertCircle, Upload, LogOut, ArrowLeft, GraduationCap, Home, Heart, RotateCcw, Trash2, Send, Download } from 'lucide-react';
+import { Calendar, ChevronRight, ChevronLeft, Sparkles, AlertCircle, Upload, LogOut, ArrowLeft, GraduationCap, Home, Heart, RotateCcw, Trash2, Send, Download } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { DataUpload } from './components/DataUpload';
 import { LabSlotPreferences } from './components/LabSlotPreferences';
@@ -14,6 +14,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthPage } from './components/AuthPage';
 import { db } from './services/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+
+const ITEMS_PER_PAGE = 10;
 
 const AppContent: React.FC = () => {
   const { currentUser, userName, logout } = useAuth();
@@ -24,6 +26,7 @@ const AppContent: React.FC = () => {
   const [preferences, setPreferences] = useState<{ [key: string]: string[] }>({});
   const [labPreferences, setLabPreferences] = useState<{ [key: string]: string[] }>({});
   const [generatedTimetables, setGeneratedTimetables] = useState<Timetable[]>([]);
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [resultsAiAnalysis, setResultsAiAnalysis] = useState<string>('');
   const [favoritesAiAnalysis, setFavoritesAiAnalysis] = useState<string>('');
   const [resultsChatHistory, setResultsChatHistory] = useState<{role: 'user' | 'assistant'; content: string}[]>([]);
@@ -94,14 +97,9 @@ const AppContent: React.FC = () => {
           if (data.labPreferences && typeof data.labPreferences === 'object') {
             setLabPreferences(data.labPreferences);
           }
-          // Load generated timetables
-          if (data.generatedTimetables && Array.isArray(data.generatedTimetables) && data.generatedTimetables.length > 0) {
-            setGeneratedTimetables(data.generatedTimetables);
-          }
           // Load last view state (so user returns to where they were)
           if (data.lastViewState && Object.values(ViewState).includes(data.lastViewState)) {
-            // Only restore certain view states
-            const validRestoreStates = [ViewState.SELECTION, ViewState.RESULTS, ViewState.FAVORITES];
+            const validRestoreStates = [ViewState.SELECTION, ViewState.FAVORITES];
             if (validRestoreStates.includes(data.lastViewState)) {
               setViewState(data.lastViewState);
             }
@@ -136,14 +134,14 @@ const AppContent: React.FC = () => {
     return obj;
   };
 
-  // Save session state (selection, preferences) to Firestore
+  // Save session state (selection, preferences, favorites) to Firestore
+  // NOTE: Candidate generatedTimetables are kept strictly in client RAM to prevent Firestore 1MB quota overflow
   const saveSessionState = async (
     coursesToSave: Course[],
     slotsToSave: TimeSlotMapping,
     selectedToSave: Course[],
     prefsToSave: { [key: string]: string[] },
     labPrefsToSave: { [key: string]: string[] },
-    generatedToSave: Timetable[],
     savedToSave: SavedTimetable[],
     viewToSave: ViewState
   ) => {
@@ -156,7 +154,6 @@ const AppContent: React.FC = () => {
         selectedCourses: sanitize(selectedToSave) || [],
         preferences: sanitize(prefsToSave) || {},
         labPreferences: sanitize(labPrefsToSave) || {},
-        generatedTimetables: sanitize(generatedToSave) || [],
         savedTimetables: sanitize(savedToSave) || [],
         lastViewState: viewToSave,
         updatedAt: new Date()
@@ -189,7 +186,6 @@ const AppContent: React.FC = () => {
         selectedCourses,
         preferences,
         labPreferences,
-        generatedTimetables,
         savedTimetables,
         viewState
       );
@@ -200,7 +196,7 @@ const AppContent: React.FC = () => {
         clearTimeout(saveTimeoutRef.current);
       }
     };
-  }, [courses, slotTimings, selectedCourses, preferences, labPreferences, generatedTimetables, savedTimetables, viewState, currentUser, isLoadingData]);
+  }, [courses, slotTimings, selectedCourses, preferences, labPreferences, savedTimetables, viewState, currentUser, isLoadingData]);
 
   const saveFavoriteTimetables = async (timetables: SavedTimetable[]) => {
     if (!currentUser) return;
@@ -262,6 +258,7 @@ const AppContent: React.FC = () => {
     setPreferences({});
     setLabPreferences({});
     setGeneratedTimetables([]);
+    setCurrentPage(1);
     setResultsAiAnalysis('');
     setFavoritesAiAnalysis('');
     setResultsChatHistory([]);
@@ -271,12 +268,22 @@ const AppContent: React.FC = () => {
   const handleGenerate = () => {
     setViewState(ViewState.GENERATING);
     setTimeout(() => {
-      const results = generateTimetables(selectedCourses, preferences, slotTimings, labPreferences);
-      setGeneratedTimetables(results);
-      setViewState(ViewState.RESULTS);
-      setResultsAiAnalysis('');
-      setResultsChatHistory([]);
-    }, 800);
+      try {
+        const effectiveSlots = slotTimings && Object.keys(slotTimings).length > 0 ? slotTimings : SLOT_TIMINGS;
+        const results = generateTimetables(selectedCourses, preferences || {}, effectiveSlots, labPreferences || {});
+        console.log(`[AutoScheduler] Generated ${results.length} timetables.`);
+        setGeneratedTimetables(results);
+        setCurrentPage(1);
+        setViewState(ViewState.RESULTS);
+        setResultsAiAnalysis('');
+        setResultsChatHistory([]);
+      } catch (err) {
+        console.error("[AutoScheduler] Error generating timetables:", err);
+        setGeneratedTimetables([]);
+        setCurrentPage(1);
+        setViewState(ViewState.RESULTS);
+      }
+    }, 50);
   };
 
   const handleSaveTimetable = (timetable: Timetable) => {
@@ -875,100 +882,195 @@ Keep each point to ONE short sentence only. Be direct and helpful.`;
         )}
 
         {/* Results Page */}
-        {viewState === ViewState.RESULTS && (
-          <div className="space-y-6 animate-in slide-in-from-bottom-8 duration-500">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">
-                {generatedTimetables.length > 0 ? `Found ${generatedTimetables.length} Valid Options` : "No Valid Schedules Found"}
-              </h2>
-              {generatedTimetables.length === 0 && (
-                <p className="text-red-500 mt-1 flex items-center gap-1"><AlertCircle className="w-4 h-4" /> Try removing some faculty restrictions.</p>
-              )}
-            </div>
+        {viewState === ViewState.RESULTS && (() => {
+          const totalPages = Math.ceil(generatedTimetables.length / ITEMS_PER_PAGE) || 1;
+          const paginatedTimetables = generatedTimetables.slice(
+            (currentPage - 1) * ITEMS_PER_PAGE,
+            currentPage * ITEMS_PER_PAGE
+          );
 
-            {resultsChatHistory.length > 0 && (
-              <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl overflow-hidden">
-                <div className="p-3 border-b border-purple-200 bg-purple-100/50">
-                  <div className="font-semibold flex items-center gap-2 text-purple-700"><Sparkles className="w-4 h-4" /> AI Analysis</div>
-                </div>
-                
-                {/* Chat Messages */}
-                <div ref={resultsChatRef} className="p-4 space-y-3 max-h-80 overflow-y-auto">
-                  {resultsChatHistory.map((msg, idx) => (
-                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm ${
-                        msg.role === 'user' 
-                          ? 'bg-indigo-600 text-white rounded-br-md' 
-                          : 'bg-white text-slate-700 border border-purple-200 rounded-bl-md shadow-sm'
-                      }`}>
-                        {msg.content}
-                      </div>
+          return (
+            <div className="space-y-6 animate-in slide-in-from-bottom-8 duration-500">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">
+                    {generatedTimetables.length > 0 ? `Found ${generatedTimetables.length} Valid Schedules` : "No Valid Schedules Found"}
+                  </h2>
+                  {generatedTimetables.length === 0 ? (
+                    <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-xl p-4 mt-2 text-sm space-y-1">
+                      <p className="font-semibold flex items-center gap-1.5"><AlertCircle className="w-4 h-4 text-amber-600" /> Mandatory Course Requirement</p>
+                      <p className="text-amber-700">
+                        Every selected course ({selectedCourses.length} courses) must be present in every generated timetable. No clash-free schedule could be formed that fits all {selectedCourses.length} courses with your current faculty filters.
+                      </p>
+                      <p className="text-amber-600 text-xs pt-1">
+                        Tip: Try selecting "Any Faculty" or choosing additional faculty options for courses with few sections.
+                      </p>
                     </div>
-                  ))}
-                  {isAnalyzing && (
-                    <div className="flex justify-start">
-                      <div className="bg-white text-slate-500 border border-purple-200 rounded-2xl rounded-bl-md px-4 py-2 text-sm shadow-sm">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
-                          <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                          <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                  ) : (
+                    <p className="text-sm text-slate-500 mt-1">
+                      Every schedule strictly includes all {selectedCourses.length} selected courses with zero slot clashes.
+                    </p>
+                  )}
+                </div>
+
+                {generatedTimetables.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleAnalyzeWithGemini(paginatedTimetables.slice(0, 3))}
+                      disabled={isAnalyzing}
+                      className="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white text-sm font-medium rounded-xl hover:from-purple-700 hover:to-indigo-700 transition-all flex items-center gap-2 shadow-md disabled:opacity-50"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      {isAnalyzing ? "Analyzing..." : "Analyze Options with AI"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {resultsChatHistory.length > 0 && (
+                <div className="bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-xl overflow-hidden">
+                  <div className="p-3 border-b border-purple-200 bg-purple-100/50">
+                    <div className="font-semibold flex items-center gap-2 text-purple-700"><Sparkles className="w-4 h-4" /> AI Analysis</div>
+                  </div>
+                  
+                  {/* Chat Messages */}
+                  <div ref={resultsChatRef} className="p-4 space-y-3 max-h-80 overflow-y-auto">
+                    {resultsChatHistory.map((msg, idx) => (
+                      <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] px-4 py-2 rounded-2xl text-sm ${
+                          msg.role === 'user' 
+                            ? 'bg-indigo-600 text-white rounded-br-md' 
+                            : 'bg-white text-slate-700 border border-purple-200 rounded-bl-md shadow-sm'
+                        }`}>
+                          {msg.content}
                         </div>
                       </div>
+                    ))}
+                    {isAnalyzing && (
+                      <div className="flex justify-start">
+                        <div className="bg-white text-slate-500 border border-purple-200 rounded-2xl rounded-bl-md px-4 py-2 text-sm shadow-sm">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce"></div>
+                            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                            <div className="w-2 h-2 bg-purple-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Chat Input */}
+                  <div className="p-3 border-t border-purple-200 bg-white">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={chatInput}
+                        onChange={(e) => setChatInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleChatSubmit(false)}
+                        placeholder="Ask a follow-up question..."
+                        className="flex-1 px-3 py-2 text-sm border border-purple-200 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-400"
+                      />
+                      <button
+                        onClick={() => handleChatSubmit(false)}
+                        disabled={isAnalyzing || !chatInput.trim()}
+                        className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Pagination Info Bar */}
+              {generatedTimetables.length > 0 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 py-3 px-4 bg-white rounded-xl border border-slate-200 shadow-sm">
+                  <div className="text-sm text-slate-600">
+                    Showing <span className="font-semibold text-slate-900">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-semibold text-slate-900">{Math.min(currentPage * ITEMS_PER_PAGE, generatedTimetables.length)}</span> of <span className="font-semibold text-indigo-600">{generatedTimetables.length}</span> schedules
+                  </div>
+                  {totalPages > 1 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 shadow-sm transition-all"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" /> Prev
+                      </button>
+                      <span className="text-xs font-semibold text-slate-700 px-2 py-1 bg-slate-100 rounded-md">
+                        {currentPage} / {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage >= totalPages}
+                        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 shadow-sm transition-all"
+                      >
+                        Next <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                   )}
                 </div>
-                
-                {/* Chat Input */}
-                <div className="p-3 border-t border-purple-200 bg-white">
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleChatSubmit(false)}
-                      placeholder="Ask a follow-up question..."
-                      className="flex-1 px-3 py-2 text-sm border border-purple-200 rounded-full focus:outline-none focus:ring-2 focus:ring-purple-400"
-                    />
-                    <button
-                      onClick={() => handleChatSubmit(false)}
-                      disabled={isAnalyzing || !chatInput.trim()}
-                      className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Send className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+              )}
 
-            <div className="grid grid-cols-1 gap-8">
-              {generatedTimetables.map((timetable) => (
-                <div key={timetable.id} className="relative">
-                  <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-                    <button
-                      onClick={() => {
-                        const totalCredits = selectedCourses.reduce((sum, c) => sum + (c.credits || 3), 0);
-                        handleDownloadTimetable({ ...timetable, savedAt: new Date().toISOString(), totalCredits, courseCount: timetable.sections.length, name: `Timetable ${timetable.id}` });
-                      }}
-                      className="p-2 rounded-full shadow-md transition-all bg-white text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 border border-slate-200"
-                      title="Download timetable"
-                    >
-                      <Download className="w-5 h-5" />
-                    </button>
-                    <button
-                      onClick={() => isTimetableSaved(timetable.id) ? handleRemoveSaved(timetable.id) : handleSaveTimetable(timetable)}
-                      className={`p-2 rounded-full shadow-md transition-all ${isTimetableSaved(timetable.id) ? 'bg-pink-500 text-white hover:bg-pink-600' : 'bg-white text-slate-400 hover:text-pink-500 hover:bg-pink-50 border border-slate-200'}`}
-                      title={isTimetableSaved(timetable.id) ? 'Remove from saved' : 'Save timetable'}
-                    >
-                      <Heart className="w-5 h-5" fill={isTimetableSaved(timetable.id) ? "currentColor" : "none"} />
-                    </button>
+              {/* Grid of Timetables (Paginated 10 per page) */}
+              <div className="grid grid-cols-1 gap-8">
+                {paginatedTimetables.map((timetable) => (
+                  <div key={timetable.id} className="relative">
+                    <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          const totalCredits = selectedCourses.reduce((sum, c) => sum + (c.credits || 3), 0);
+                          handleDownloadTimetable({ ...timetable, savedAt: new Date().toISOString(), totalCredits, courseCount: timetable.sections.length, name: `Timetable ${timetable.id}` });
+                        }}
+                        className="p-2 rounded-full shadow-md transition-all bg-white text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 border border-slate-200"
+                        title="Download timetable"
+                      >
+                        <Download className="w-5 h-5" />
+                      </button>
+                      <button
+                        onClick={() => isTimetableSaved(timetable.id) ? handleRemoveSaved(timetable.id) : handleSaveTimetable(timetable)}
+                        className={`p-2 rounded-full shadow-md transition-all ${isTimetableSaved(timetable.id) ? 'bg-pink-500 text-white hover:bg-pink-600' : 'bg-white text-slate-400 hover:text-pink-500 hover:bg-pink-50 border border-slate-200'}`}
+                        title={isTimetableSaved(timetable.id) ? 'Remove from saved' : 'Save timetable'}
+                      >
+                        <Heart className="w-5 h-5" fill={isTimetableSaved(timetable.id) ? "currentColor" : "none"} />
+                      </button>
+                    </div>
+                    <TimetableGrid timetable={timetable} slotTimings={slotTimings} />
                   </div>
-                  <TimetableGrid timetable={timetable} slotTimings={slotTimings} />
+                ))}
+              </div>
+
+              {/* Bottom Pagination Controls */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-3 pt-4 pb-6">
+                  <button
+                    onClick={() => {
+                      setCurrentPage(p => Math.max(1, p - 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    disabled={currentPage === 1}
+                    className="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 shadow-sm transition-all"
+                  >
+                    <ChevronLeft className="w-4 h-4" /> Previous 10
+                  </button>
+                  <span className="text-sm font-semibold text-slate-700 px-4 py-2 bg-slate-100 rounded-xl">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setCurrentPage(p => Math.min(totalPages, p + 1));
+                      window.scrollTo({ top: 0, behavior: 'smooth' });
+                    }}
+                    disabled={currentPage >= totalPages}
+                    className="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 shadow-sm transition-all"
+                  >
+                    Next 10 <ChevronRight className="w-4 h-4" />
+                  </button>
                 </div>
-              ))}
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Favorites Page */}
         {viewState === ViewState.FAVORITES && (

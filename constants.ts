@@ -94,6 +94,10 @@ const SLOT_CONFIGURATION: Record<string, { day: string; slotId: number }[]> = {
   "TB2": [...theory('FRI', 8)],
   "TC1": [...theory('MON', 4)],
   "TC2": [...theory('MON', 8)],
+  "TD1": [...theory('THU', 4)],
+  "TD2": [...theory('THU', 8)],
+  "TE1": [...theory('WED', 4)],
+  "TE2": [...theory('WED', 8)],
 
   // Labs - Morning (slots 1-2)
   "L1+L2": lab('MON', 1),
@@ -118,6 +122,18 @@ const SLOT_CONFIGURATION: Record<string, { day: string; slotId: number }[]> = {
   "L35+L36": lab('THU', 4),
   "L37+L38": lab('FRI', 3),
   "L39+L40": lab('FRI', 4),
+
+  // Extended Labs - Afternoon (slots 3-4)
+  "L41+L42": lab('MON', 3),
+  "L43+L44": lab('MON', 4),
+  "L45+L46": lab('TUE', 3),
+  "L47+L48": lab('TUE', 4),
+  "L49+L50": lab('WED', 3),
+  "L51+L52": lab('WED', 4),
+  "L53+L54": lab('THU', 3),
+  "L55+L56": lab('THU', 4),
+  "L57+L58": lab('FRI', 3),
+  "L59+L60": lab('FRI', 4),
 };
 
 // ==========================================

@@ -4,6 +4,7 @@ import { Course, TimeSlotMapping } from '../types';
 import { GoogleGenAI } from "@google/genai";
 import * as pdfjsLib from 'pdfjs-dist';
 import * as XLSX from 'xlsx';
+import { SLOT_TIMINGS } from '../constants';
 
 // Initialize PDF.js worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
@@ -32,109 +33,139 @@ export const DataUpload: React.FC<Props> = ({ onDataLoaded, onGoBack }) => {
         return fullText;
     };
 
-    // Direct Excel parsing without AI - handles P column logic
+    // Helper to sanitize and normalize slot codes (e.g., "L23-L24" -> "L23+L24", " B1 " -> "B1")
+    const normalizeSlotString = (slot: any): string | undefined => {
+        if (!slot) return undefined;
+        let s = String(slot).trim();
+        if (!s) return undefined;
+        // Replace hyphens between alphanumeric slot components e.g. L23-L24 -> L23+L24
+        s = s.replace(/([A-Za-z0-9]+)\s*-\s*([A-Za-z0-9]+)/g, '$1+$2');
+        // Clean whitespace around plus and comma
+        s = s.replace(/\s*\+\s*/g, '+').replace(/\s*,\s*/g, ', ');
+        return s;
+    };
+
+    // Direct Excel parsing without AI - handles P column logic dynamically
     const parseExcelDirectly = async (file: File) => {
         const arrayBuffer = await file.arrayBuffer();
         const workbook = XLSX.read(arrayBuffer);
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
         
-        // Skip header row
-        const dataRows = rows.slice(1).filter(row => row[2]); // Filter rows with course code
+        // Skip header row and filter rows with course code
+        const dataRows = rows.slice(1).filter(row => row[2] && String(row[2]).trim());
         
         // Group by course code
         const courseMap = new Map<string, any>();
         
-        dataRows.forEach((row, idx) => {
-            const courseCode = row[2];
-            const courseTitle = row[3];
-            const L = row[4]; // Lecture hours - if exists, has theory
-            const P = row[5]; // Practical hours - 0=no lab, 2=independent lab, 4=linked lab
-            const credits = row[6] || 3;
-            const theoryFaculty = row[7];
-            const labFaculty = row[8];
-            const theorySlot = row[9];
-            const labSlot = row[10];
+        dataRows.forEach((row) => {
+            const courseCode = String(row[2]).trim();
+            const courseTitle = row[3] ? String(row[3]).trim() : courseCode;
+            const L = row[4]; // Lecture hours
+            const P = row[5]; // Practical hours (0 = no lab, 2 = independent lab, 4 = linked lab)
+            const credits = Number(row[6]) || 3;
+            const theoryFaculty = row[7] ? String(row[7]).trim() : '';
+            const labFaculty = row[8] ? String(row[8]).trim() : '';
+            let theorySlot = normalizeSlotString(row[9]);
+            let labSlot = normalizeSlotString(row[10]);
+            
+            // Auto-heal: If theorySlot is formatted like a lab slot (e.g. L23+L24) and labSlot is empty
+            if (theorySlot && /^L\d+/i.test(theorySlot) && !labSlot) {
+                labSlot = theorySlot;
+                theorySlot = undefined;
+            }
             
             if (!courseMap.has(courseCode)) {
                 courseMap.set(courseCode, {
                     code: courseCode,
                     title: courseTitle,
                     credits: credits,
-                    sections: [], // Full sections (theory + optional lab)
-                    theorySections: [], // For independent theory selection
-                    labSections: [], // For independent lab selection
-                    linkedSections: [], // P=4: theory+lab must be taken together
+                    sections: [],
+                    theorySections: [],
+                    labSections: [],
+                    linkedSections: [],
                     hasLinkedLab: false
                 });
             }
             
             const course = courseMap.get(courseCode)!;
-            const hasTheory = L != null && theorySlot;
-            const hasLab = P && P > 0 && labSlot;
+            const numP = P !== undefined && P !== null && !isNaN(Number(P)) ? Number(P) : undefined;
+            const numL = L !== undefined && L !== null && !isNaN(Number(L)) ? Number(L) : undefined;
+
+            const hasTheory = Boolean(theorySlot && (numL === undefined || numL > 0 || !labSlot));
+            const hasLab = Boolean(labSlot && (numP === undefined || numP > 0 || !theorySlot));
             
             // Check if this is a LINKED lab (P=4)
-            if (P === 4) {
+            if (numP === 4) {
                 course.hasLinkedLab = true;
-                // For linked labs, theory and lab are bundled together
                 if (hasTheory && hasLab) {
                     const section = {
-                        id: `${courseCode}-LINKED-${theoryFaculty}-${theorySlot}`,
+                        id: `${courseCode}-LINKED-${theoryFaculty || 'TBA'}-${theorySlot}-${labSlot}`,
                         courseCode: courseCode,
-                        faculty: theoryFaculty,
-                        theorySlot: theorySlot,
-                        labSlot: labSlot,
-                        labFaculty: labFaculty || theoryFaculty
+                        faculty: theoryFaculty || 'TBA',
+                        theorySlot: theorySlot!,
+                        labSlot: labSlot!,
+                        labFaculty: labFaculty || theoryFaculty || 'TBA'
                     };
                     course.linkedSections.push(section);
                     course.sections.push(section);
                 }
             } else {
-                // P=0 or P=2: Independent theory and lab
-                
-                // If row has BOTH theory and lab, create a full section
+                // P=0 or P=2: Independent theory and lab options
                 if (hasTheory && hasLab) {
                     const section = {
-                        id: `${courseCode}-${theoryFaculty}-${theorySlot}-${labSlot}`,
+                        id: `${courseCode}-${theoryFaculty || 'TBA'}-${theorySlot}-${labSlot}`,
                         courseCode: courseCode,
-                        faculty: theoryFaculty,
-                        theorySlot: theorySlot,
+                        faculty: theoryFaculty || 'TBA',
+                        theorySlot: theorySlot!,
                         labSlot: labSlot,
-                        labFaculty: labFaculty || theoryFaculty
+                        labFaculty: labFaculty || theoryFaculty || 'TBA'
                     };
                     course.sections.push(section);
                 } else if (hasTheory) {
-                    // Theory only row
                     const section = {
-                        id: `${courseCode}-${theoryFaculty}-${theorySlot}`,
+                        id: `${courseCode}-${theoryFaculty || 'TBA'}-${theorySlot}`,
                         courseCode: courseCode,
-                        faculty: theoryFaculty,
-                        theorySlot: theorySlot,
+                        faculty: theoryFaculty || 'TBA',
+                        theorySlot: theorySlot!,
                         labSlot: undefined,
                         labFaculty: undefined
                     };
                     course.sections.push(section);
+                } else if (hasLab) {
+                    // Critical fix: Standalone or independent lab-only rows
+                    const section = {
+                        id: `${courseCode}-LAB-${labFaculty || theoryFaculty || 'TBA'}-${labSlot}`,
+                        courseCode: courseCode,
+                        faculty: theoryFaculty || 'TBA',
+                        theorySlot: '',
+                        labSlot: labSlot!,
+                        labFaculty: labFaculty || theoryFaculty || 'TBA'
+                    };
+                    course.sections.push(section);
                 }
                 
-                // Also add to separate arrays for independent selection UI
+                // Track for independent selection UI
                 if (hasTheory) {
                     course.theorySections.push({
-                        id: `${courseCode}-T-${theoryFaculty}-${theorySlot}`,
-                        faculty: theoryFaculty,
-                        slot: theorySlot
+                        id: `${courseCode}-T-${theoryFaculty || 'TBA'}-${theorySlot}`,
+                        courseCode: courseCode,
+                        faculty: theoryFaculty || 'TBA',
+                        slot: theorySlot!
                     });
                 }
                 if (hasLab) {
                     course.labSections.push({
-                        id: `${courseCode}-L-${labFaculty || theoryFaculty}-${labSlot}`,
-                        faculty: labFaculty || theoryFaculty,
-                        slot: labSlot
+                        id: `${courseCode}-L-${labFaculty || theoryFaculty || 'TBA'}-${labSlot}`,
+                        courseCode: courseCode,
+                        faculty: labFaculty || theoryFaculty || 'TBA',
+                        slot: labSlot!
                     });
                 }
             }
         });
         
-        // Convert to final format
+        // Convert map to final courses list
         const courses = Array.from(courseMap.values()).map(course => {
             return {
                 code: course.code,
@@ -149,6 +180,18 @@ export const DataUpload: React.FC<Props> = ({ onDataLoaded, onGoBack }) => {
             };
         });
         
+        // Console validation step
+        console.group('[AutoScheduler] Excel Ingestion Validation');
+        console.log(`Extracted ${courses.length} courses from Excel file.`);
+        courses.forEach(c => {
+            console.log(
+                `Course: ${c.code} (${c.title}) | Total Sections: ${c.sections.length} | ` +
+                `Theory Opts: ${c.theoryOptions.length} | Lab Opts: ${c.labOptions.length} | ` +
+                `Linked (P=4): ${c.hasLinkedLab ? `YES (${c.linkedSections.length})` : 'NO'}`
+            );
+        });
+        console.groupEnd();
+
         return courses;
     };
 
@@ -205,7 +248,7 @@ export const DataUpload: React.FC<Props> = ({ onDataLoaded, onGoBack }) => {
                 // Use direct parsing for Excel - no AI needed
                 const courses = await parseExcelDirectly(file);
                 if (courses.length > 0) {
-                    onDataLoaded(courses, {});
+                    onDataLoaded(courses, SLOT_TIMINGS);
                 } else {
                     setError("No courses found in Excel file.");
                 }

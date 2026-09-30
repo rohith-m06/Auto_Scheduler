@@ -1,0 +1,38 @@
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+.course-card.active-card {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 14px -2px rgba(59, 130, 246, 0.18);
+  background-color: #ffffff;
+}
+
+.course-card.inactive-card {
+  border-color: #e2e8f0;
+  background-color: #ffffff;
+}
+
+@media print {
+  @page {
+    size: landscape A4;
+    margin: 5mm;
+  }
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: #0f172a !important;
+  }
+  #printable-timetable-area {
+    width: 100% !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}

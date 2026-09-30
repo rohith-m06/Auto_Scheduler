@@ -1,7 +1,7 @@
 {
   "name": "autoscheduler",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,18 +9,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "^1.30.0",
     "@vercel/analytics": "^1.6.1",
     "firebase": "^12.6.0",
     "framer-motion": "^12.23.24",
     "lucide-react": "^0.554.0",
-    "pdfjs-dist": "^5.4.394",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

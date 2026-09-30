@@ -8,14 +8,14 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Dependencies
-node_modules
+node_modules/
 
 # Build output
-dist
-dist-ssr
-build
+dist/
+dist-ssr/
+build/
 
-# Environment variables (IMPORTANT - contains API keys)
+# Environment variables (contains private keys)
 .env
 .env.local
 .env.*.local
@@ -23,7 +23,7 @@ build
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
@@ -31,13 +31,19 @@ build
 *.sln
 *.sw?
 
-# Agent/AI files
+# Agent / AI directories
 .agent/
+.gemini/
 
 # OS files
 Thumbs.db
+Desktop.ini
 
-# Package lock (optional - uncomment if you want to exclude)
-# package-lock.json
+# Vercel deployment metadata
+.vercel/
 
-.vercel
+# Excel data sheets and test HTMLs
+*.xlsx
+*.xls
+timetable_*.html
+selected_timetable.html

@@ -1,5 +1,0 @@
-{
-  "name": "AutoScheduler",
-  "description": "Intelligent college timetable generator that parses course options, handles slot conflicts, and optimizes your weekly schedule.",
-  "requestFramePermissions": []
-}

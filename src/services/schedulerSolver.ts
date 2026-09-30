@@ -71,19 +71,25 @@ export const DAY_MAP: Record<string, number> = { 'MON': 0, 'TUE': 1, 'WED': 2, '
 
 export function resolveSlotToPositions(slotCode: string): SlotPosition[] {
   if (!slotCode) return [];
-  const clean = slotCode.replace(/\s+/g, '').replace(/-/g, '+').toUpperCase();
-  const parts = clean.split(',');
+  const normalized = slotCode.trim().toUpperCase()
+    .replace(/[,/]/g, ' ')
+    .replace(/\s+/g, ' ');
+
+  const tokens = normalized.split(' ');
   const res: SlotPosition[] = [];
-  parts.forEach(part => {
-    if (!part) return;
-    if (SLOT_CONFIG[part]) {
-      res.push(...SLOT_CONFIG[part]);
-    } else if (part.includes('+')) {
-      part.split('+').forEach(sp => {
+
+  tokens.forEach(tok => {
+    if (!tok) return;
+    if (SLOT_CONFIG[tok]) {
+      res.push(...SLOT_CONFIG[tok]);
+    } else if (tok.includes('+')) {
+      const subParts = tok.split('+');
+      subParts.forEach(sp => {
         if (SLOT_CONFIG[sp]) res.push(...SLOT_CONFIG[sp]);
       });
     }
   });
+
   return res;
 }
 
